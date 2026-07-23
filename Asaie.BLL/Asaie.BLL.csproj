@@ -1,0 +1,18 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <PackageReference Include="OllamaSharp" Version="5.4.27" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Asaie.DAL\Asaie.DAL.csproj" />
+    <ProjectReference Include="..\Asaie.Domain\Asaie.Domain.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

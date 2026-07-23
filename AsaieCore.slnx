@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="Asaie.Api/Asaie.Api.csproj" Id="53311db8-5618-43d9-8cb0-dc9431a7f799" />
+  <Project Path="Asaie.BLL/Asaie.BLL.csproj" Id="cb45bb64-b00b-4941-9765-d380ecb4629d" />
+  <Project Path="Asaie.DAL/Asaie.DAL.csproj" Id="19a8d6d2-8bdc-4d76-807d-2d296d1a998e" />
+  <Project Path="Asaie.Domain/Asaie.Domain.csproj" Id="2d399e6a-39d4-4c66-831f-5d3aa4887f29" />
+</Solution>
