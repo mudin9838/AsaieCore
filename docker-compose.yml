@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  asaie-db:
+    image: pgvector/pgvector:pg16
+    container_name: asaie-db
+    environment:
+      POSTGRES_DB: asaie_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: SovereignPassword123!
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  ollama-node:
+    image: ollama/ollama:latest
+    container_name: ollama-node
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
+volumes:
+  pgdata:
+  ollama_data:

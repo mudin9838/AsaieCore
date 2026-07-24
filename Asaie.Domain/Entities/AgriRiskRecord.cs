@@ -1,5 +1,5 @@
 ﻿using System.ComponentModel.DataAnnotations.Schema;
-using System.Numerics;
+using Vector = Pgvector.Vector; // <-- Prevents System.Numerics collision
 
 namespace Asaie.Domain.Entities;
 
@@ -14,9 +14,9 @@ public class AgriRiskRecord
     public string HazardType { get; set; } = string.Empty; // Drought, Pest Locust, Flood
     public string Content { get; set; } = string.Empty;
 
-    // Vector Embedding for Semantic Search / Local RAG (e.g., 384 or 768 dimensions)
+    // Vector Embedding for Semantic Search / Local RAG (384 dimensions for all-minilm)
     [Column(TypeName = "vector(384)")]
-    public Vector? Embedding { get; set; }
+    public Vector? Embedding { get; set; } // Now strictly Pgvector.Vector
 
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 }
