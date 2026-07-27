@@ -1,4 +1,4 @@
-# 🌍 ASAIE — African Sovereign AI Engine
+# 🌍 African Sovereign AI Engine (ASAIE): Open Source AI for Africa
 
 > **Decentralized, Multi-Tenant RAG Engine for AU Member States**  
 > *Submitted for AU InnoFest '26 • Pillar: Digital Sovereignty & Youth AI Innovation*
