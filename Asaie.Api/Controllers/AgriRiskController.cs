@@ -24,10 +24,20 @@ public class AgriRiskController : ControllerBase
     [HttpPost("query")]
     public async Task<IActionResult> QuerySovereignNode([FromBody] QueryDto dto)
     {
-        var answer = await _sovereignService.QuerySovereignLlamaAsync(dto.MemberState, dto.Prompt);
-        return Ok(new { memberState = dto.MemberState, response = answer });
+        // 1. Pass TargetLanguage (defaults to "en" if null)
+        // 2. Call the detailed service method that returns metrics for the audit trail
+        var result = await _sovereignService.QuerySovereignLlamaDetailedAsync(
+            dto.MemberState,
+            dto.Prompt,
+            dto.TargetLanguage ?? "en"
+        );
+
+        // 3. Return the full structured object so React can render the response + audit metrics
+        return Ok(result);
     }
 }
 
 public record CreateRecordDto(string MemberState, string Region, string Hazard, string Content);
-public record QueryDto(string MemberState, string Prompt);
+
+// Updated QueryDto to accept the multilingual language selection from the React UI
+public record QueryDto(string MemberState, string Prompt, string? TargetLanguage = "en");

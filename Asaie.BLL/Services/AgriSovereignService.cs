@@ -1,4 +1,5 @@
 ﻿using Asaie.DAL.Context;
+using Asaie.Domain.DTOs;
 using Asaie.Domain.Entities;
 using Asaie.Domain.Interfaces;
 using Microsoft.EntityFrameworkCore;
@@ -114,4 +115,80 @@ public class AgriSovereignService : IAgriSovereignService
 
         return responseBuilder.ToString();
     }
+
+    public async Task<SovereignQueryResult> QuerySovereignLlamaDetailedAsync(string memberState, string prompt, string targetLanguage = "en")
+    {
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        // 1. Vector Search
+        var embedRequest = new EmbedRequest { Model = "all-minilm", Input = new List<string> { prompt } };
+        var embedResponse = await _ollamaClient.EmbedAsync(embedRequest);
+        var queryVector = new Vector(embedResponse.Embeddings[0]);
+
+        // Fetch records with Cosine Distance calculation
+        var contextRecords = await _context.AgriRiskRecords
+            .Where(x => x.MemberStateCode == memberState.ToUpperInvariant())
+            .Select(x => new
+            {
+                Record = x,
+                Distance = x.Embedding!.CosineDistance(queryVector)
+            })
+            .OrderBy(x => x.Distance)
+            .Take(3)
+            .ToListAsync();
+
+        var contextText = string.Join("\n", contextRecords.Select(r => $"[{r.Record.HazardType} in {r.Record.RegionName}]: {r.Record.Content}"));
+
+        // 2. Multilingual System Prompt Construction
+        string languageInstruction = targetLanguage.ToLower() switch
+        {
+            "am" => """
+            You MUST respond completely in native Amharic script (አማርኛ). 
+            Do NOT use Latin letters, English words, or phonetic transliterations in parentheses.
+            Example format:
+            በተገኘው መረጃ መሠረት በቾማ ዞን የበቆሎ ሰብሎች በFall Armyworm (የበቆሎ ተባይ) ተጠቅተዋል።
+            """,
+            "sw" => "Respond ONLY in Swahili (Kiswahili). Translate all context and insights accurately.",
+            "ha" => "Respond ONLY in Hausa. Translate all context and insights accurately.",
+            "fr" => "Respond ONLY in French (Français). Translate all context and insights accurately.",
+            _ => "Respond in English."
+        };
+
+        var fullPrompt = $"""
+    You are ASAIE, an official sovereign AI assistant for AU Member State: {memberState.ToUpperInvariant()}.
+    {languageInstruction}
+    Use ONLY the following sovereign local context to answer the user query. If context is insufficient, state it clearly in the chosen language.
+
+    [SOVEREIGN CONTEXT DATA]
+    {contextText}
+
+    [USER QUERY]
+    {prompt}
+    """;
+
+        // 3. Local Generation Stream
+        var responseBuilder = new StringBuilder();
+        await foreach (var responseStream in _ollamaClient.GenerateAsync(fullPrompt))
+        {
+            if (responseStream != null && !string.IsNullOrEmpty(responseStream.Response))
+            {
+                responseBuilder.Append(responseStream.Response);
+            }
+        }
+
+        stopwatch.Stop();
+
+        return new SovereignQueryResult(
+            MemberState: memberState.ToUpperInvariant(),
+            Response: responseBuilder.ToString(),
+            RetrievedContext: contextRecords.Select(c => new ContextRecordDto(
+                c.Record.RegionName,
+                c.Record.HazardType,
+                c.Record.Content,
+                Math.Round(c.Distance, 4)
+            )).ToList(),
+            ExecutionTimeMs: Math.Round(stopwatch.Elapsed.TotalMilliseconds, 2)
+        );
+    }
+
 }
