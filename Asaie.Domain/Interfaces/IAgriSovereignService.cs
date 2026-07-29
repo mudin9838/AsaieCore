@@ -6,8 +6,13 @@ public interface IAgriSovereignService
 {
     Task<AgriRiskRecord> AddRecordAsync(string memberState, string region, string hazard, string content);
     Task<IEnumerable<AgriRiskRecord>> SearchSimilarRecordsAsync(string memberState, string query, int topK = 3);
-    Task<string> QuerySovereignLlamaAsync(string memberState, string prompt);
+    // Task<string> QuerySovereignLlamaAsync(string memberState, string prompt);
     Task<SovereignQueryResult> QuerySovereignLlamaDetailedAsync(string memberState, string prompt, string targetLanguage = "en");
+    IAsyncEnumerable<string> StreamSovereignLlamaAsync(
+            string memberState,
+            string prompt,
+            string targetLanguage = "en",
+            CancellationToken cancellationToken = default);
 
 }
 

@@ -6,7 +6,10 @@ using Microsoft.EntityFrameworkCore;
 using OllamaSharp;
 using OllamaSharp.Models;
 using Pgvector.EntityFrameworkCore;
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
 using Vector = Pgvector.Vector; // Resolves SIMD System.Numerics type collision
 
 namespace Asaie.BLL.Services;
@@ -16,31 +19,31 @@ public class AgriSovereignService : IAgriSovereignService
     private readonly AsaieDbContext _context;
     private readonly IOllamaApiClient _ollamaClient;
 
+    private const string EMBEDDING_MODEL = "all-minilm";
+    private const string GENERATION_MODEL = "qwen2.5:7b";
+
+    private static readonly JsonSerializerOptions _jsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
+
     public AgriSovereignService(AsaieDbContext context, IOllamaApiClient ollamaClient)
     {
         _context = context;
         _ollamaClient = ollamaClient;
     }
 
-    /// <summary>
-    /// Ingests a new agricultural risk record, generates local vector embeddings via Ollama,
-    /// and persists it to PostgreSQL tagged with a specific sovereign AU Member State code.
-    /// </summary>
     public async Task<AgriRiskRecord> AddRecordAsync(string memberState, string region, string hazard, string content)
     {
-        // 1. Generate local vector embedding using all-minilm via OllamaSharp EmbedRequest
         var embedRequest = new EmbedRequest
         {
-            Model = "all-minilm",
+            Model = EMBEDDING_MODEL,
             Input = new List<string> { content }
         };
 
         var embedResponse = await _ollamaClient.EmbedAsync(embedRequest);
-
-        // Extract 384-dimension float vector from response
         float[] floatArray = embedResponse.Embeddings[0];
 
-        // 2. Map to Sovereign Entity
         var record = new AgriRiskRecord
         {
             MemberStateCode = memberState.ToUpperInvariant(),
@@ -56,22 +59,16 @@ public class AgriSovereignService : IAgriSovereignService
         return record;
     }
 
-    /// <summary>
-    /// Performs a sovereign vector cosine similarity search strictly isolated 
-    /// to the specified AU Member State's data partition.
-    /// </summary>
     public async Task<IEnumerable<AgriRiskRecord>> SearchSimilarRecordsAsync(string memberState, string query, int topK = 3)
     {
-        // 1. Embed incoming query vector
         var embedRequest = new EmbedRequest
         {
-            Model = "all-minilm",
+            Model = EMBEDDING_MODEL,
             Input = new List<string> { query }
         };
         var embedResponse = await _ollamaClient.EmbedAsync(embedRequest);
         var queryVector = new Vector(embedResponse.Embeddings[0]);
 
-        // 2. Multi-tenant Sovereign Filtering & Vector Distance Calculation
         return await _context.AgriRiskRecords
             .Where(x => x.MemberStateCode == memberState.ToUpperInvariant())
             .OrderBy(x => x.Embedding!.CosineDistance(queryVector))
@@ -79,33 +76,16 @@ public class AgriSovereignService : IAgriSovereignService
             .ToListAsync();
     }
 
-    /// <summary>
-    /// Executes a Sovereign Retrieval-Augmented Generation (RAG) pipeline:
-    /// Fetches local vector context and streams Llama 3 generation without sending data off-node.
-    /// </summary>
     public async Task<string> QuerySovereignLlamaAsync(string memberState, string prompt)
     {
-        // 1. Fetch relevant sovereign context from vector store
         var contextRecords = await SearchSimilarRecordsAsync(memberState, prompt, topK: 3);
-
         var contextText = string.Join("\n", contextRecords.Select(r => $"[{r.HazardType} in {r.RegionName}]: {r.Content}"));
+        var fullPrompt = BuildPrompt(memberState, "en", contextText, prompt);
 
-        // 2. Construct sovereign system prompt template
-        var fullPrompt = $"""
-        You are ASAIE, a sovereign AI assistant for AU Member State: {memberState.ToUpperInvariant()}.
-        Use ONLY the following sovereign local context to answer the prompt. If the context is insufficient, state it clearly.
-        
-        [SOVEREIGN CONTEXT DATA]
-        {contextText}
-        
-        [USER QUERY]
-        {prompt}
-        """;
-
-        // 3. Stream and assemble token response from local Ollama node
         var responseBuilder = new StringBuilder();
+        var generateRequest = new GenerateRequest { Model = GENERATION_MODEL, Prompt = fullPrompt };
 
-        await foreach (var responseStream in _ollamaClient.GenerateAsync(fullPrompt))
+        await foreach (var responseStream in _ollamaClient.GenerateAsync(generateRequest))
         {
             if (responseStream != null && !string.IsNullOrEmpty(responseStream.Response))
             {
@@ -118,14 +98,12 @@ public class AgriSovereignService : IAgriSovereignService
 
     public async Task<SovereignQueryResult> QuerySovereignLlamaDetailedAsync(string memberState, string prompt, string targetLanguage = "en")
     {
-        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var stopwatch = Stopwatch.StartNew();
 
-        // 1. Vector Search
-        var embedRequest = new EmbedRequest { Model = "all-minilm", Input = new List<string> { prompt } };
+        var embedRequest = new EmbedRequest { Model = EMBEDDING_MODEL, Input = new List<string> { prompt } };
         var embedResponse = await _ollamaClient.EmbedAsync(embedRequest);
         var queryVector = new Vector(embedResponse.Embeddings[0]);
 
-        // Fetch records with Cosine Distance calculation
         var contextRecords = await _context.AgriRiskRecords
             .Where(x => x.MemberStateCode == memberState.ToUpperInvariant())
             .Select(x => new
@@ -138,37 +116,17 @@ public class AgriSovereignService : IAgriSovereignService
             .ToListAsync();
 
         var contextText = string.Join("\n", contextRecords.Select(r => $"[{r.Record.HazardType} in {r.Record.RegionName}]: {r.Record.Content}"));
+        var fullPrompt = BuildPrompt(memberState, targetLanguage, contextText, prompt);
 
-        // 2. Multilingual System Prompt Construction
-        string languageInstruction = targetLanguage.ToLower() switch
+        var responseBuilder = new StringBuilder();
+        var generateRequest = new GenerateRequest
         {
-            "am" => """
-            You MUST respond completely in native Amharic script (አማርኛ). 
-            Do NOT use Latin letters, English words, or phonetic transliterations in parentheses.
-            Example format:
-            በተገኘው መረጃ መሠረት በቾማ ዞን የበቆሎ ሰብሎች በFall Armyworm (የበቆሎ ተባይ) ተጠቅተዋል።
-            """,
-            "sw" => "Respond ONLY in Swahili (Kiswahili). Translate all context and insights accurately.",
-            "ha" => "Respond ONLY in Hausa. Translate all context and insights accurately.",
-            "fr" => "Respond ONLY in French (Français). Translate all context and insights accurately.",
-            _ => "Respond in English."
+            Model = GENERATION_MODEL,
+            Prompt = fullPrompt,
+            Options = new RequestOptions { NumPredict = 120, Temperature = 0.1f }
         };
 
-        var fullPrompt = $"""
-    You are ASAIE, an official sovereign AI assistant for AU Member State: {memberState.ToUpperInvariant()}.
-    {languageInstruction}
-    Use ONLY the following sovereign local context to answer the user query. If context is insufficient, state it clearly in the chosen language.
-
-    [SOVEREIGN CONTEXT DATA]
-    {contextText}
-
-    [USER QUERY]
-    {prompt}
-    """;
-
-        // 3. Local Generation Stream
-        var responseBuilder = new StringBuilder();
-        await foreach (var responseStream in _ollamaClient.GenerateAsync(fullPrompt))
+        await foreach (var responseStream in _ollamaClient.GenerateAsync(generateRequest))
         {
             if (responseStream != null && !string.IsNullOrEmpty(responseStream.Response))
             {
@@ -191,4 +149,96 @@ public class AgriSovereignService : IAgriSovereignService
         );
     }
 
+    public async IAsyncEnumerable<string> StreamSovereignLlamaAsync(
+        string memberState,
+        string prompt,
+        string targetLanguage = "en",
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var stopwatch = Stopwatch.StartNew();
+
+        var embedRequest = new EmbedRequest { Model = EMBEDDING_MODEL, Input = new List<string> { prompt } };
+        var embedResponse = await _ollamaClient.EmbedAsync(embedRequest);
+        var queryVector = new Vector(embedResponse.Embeddings[0]);
+
+        var contextRecords = await _context.AgriRiskRecords
+            .Where(x => x.MemberStateCode == memberState.ToUpperInvariant())
+            .Select(x => new
+            {
+                Record = x,
+                Distance = x.Embedding!.CosineDistance(queryVector)
+            })
+            .OrderBy(x => x.Distance)
+            .Take(3)
+            .ToListAsync(cancellationToken);
+
+        var contextText = string.Join("\n", contextRecords.Select(r => $"[{r.Record.HazardType} in {r.Record.RegionName}]: {r.Record.Content}"));
+        var fullPrompt = BuildPrompt(memberState, targetLanguage, contextText, prompt);
+
+        var generateRequest = new GenerateRequest
+        {
+            Model = GENERATION_MODEL,
+            Prompt = fullPrompt,
+            Options = new RequestOptions { NumPredict = 120, Temperature = 0.1f }
+        };
+
+        await foreach (var responseStream in _ollamaClient.GenerateAsync(generateRequest, cancellationToken))
+        {
+            if (responseStream != null && !string.IsNullOrEmpty(responseStream.Response))
+            {
+                yield return responseStream.Response;
+            }
+        }
+
+        stopwatch.Stop();
+
+        var auditData = new SovereignQueryResult(
+            MemberState: memberState.ToUpperInvariant(),
+            Response: string.Empty,
+            RetrievedContext: contextRecords.Select(c => new ContextRecordDto(
+                c.Record.RegionName,
+                c.Record.HazardType,
+                c.Record.Content,
+                Math.Round(c.Distance, 4)
+            )).ToList(),
+            ExecutionTimeMs: Math.Round(stopwatch.Elapsed.TotalMilliseconds, 2)
+        );
+
+        // Append metadata delimiter with camelCase serialized audit data
+        yield return $"\n[METADATA]{JsonSerializer.Serialize(auditData, _jsonOptions)}";
+    }
+
+    private static string BuildPrompt(string memberState, string targetLanguage, string contextText, string prompt)
+    {
+        string languageInstruction = targetLanguage.ToLower() switch
+        {
+            "ar" => """
+                    You MUST respond 100% in native, pure Modern Standard Arabic (العربية الفصحى).
+                    CRITICAL RULES:
+                    1. Do NOT output any Latin, English, or Cyrillic characters under any circumstances.
+                    2. Translate every single term, concept, and metric strictly into standard Arabic.
+                    3. Keep sentences clear, concise, and structured with bullet points.
+                    """,
+            "am" => """
+                    You MUST respond completely in native Amharic script (አማርኛ). 
+                    Do NOT use Latin letters, English words, or phonetic transliterations in parentheses.
+                    """,
+            "sw" => "Respond ONLY in Swahili (Kiswahili). Translate all context and insights accurately.",
+            "ha" => "Respond ONLY in Hausa. Translate all context and insights accurately.",
+            "fr" => "Respond ONLY in French (Français). Translate all context and insights accurately.",
+            _ => "Respond in English."
+        };
+
+        return $"""
+                You are ASAIE, an official sovereign AI assistant for AU Member State: {memberState.ToUpperInvariant()}.
+                {languageInstruction}
+                Use ONLY the following sovereign local context to answer the user query. If context is insufficient, state it clearly in the chosen language.
+
+                [SOVEREIGN CONTEXT DATA]
+                {contextText}
+
+                [USER QUERY]
+                {prompt}
+                """;
+    }
 }

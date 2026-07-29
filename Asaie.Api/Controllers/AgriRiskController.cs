@@ -24,16 +24,31 @@ public class AgriRiskController : ControllerBase
     [HttpPost("query")]
     public async Task<IActionResult> QuerySovereignNode([FromBody] QueryDto dto)
     {
-        // 1. Pass TargetLanguage (defaults to "en" if null)
-        // 2. Call the detailed service method that returns metrics for the audit trail
         var result = await _sovereignService.QuerySovereignLlamaDetailedAsync(
             dto.MemberState,
             dto.Prompt,
             dto.TargetLanguage ?? "en"
         );
-
-        // 3. Return the full structured object so React can render the response + audit metrics
         return Ok(result);
+    }
+
+    [HttpPost("query-stream")]
+    public async Task StreamQuerySovereignNode(
+        [FromBody] QueryDto dto,
+        CancellationToken cancellationToken)
+    {
+        Response.ContentType = "text/event-stream";
+        Response.Headers.Append("Cache-Control", "no-cache");
+
+        await foreach (var token in _sovereignService.StreamSovereignLlamaAsync(
+            dto.MemberState,
+            dto.Prompt,
+            dto.TargetLanguage ?? "en",
+            cancellationToken))
+        {
+            await Response.WriteAsync(token, cancellationToken);
+            await Response.Body.FlushAsync(cancellationToken);
+        }
     }
 }
 
